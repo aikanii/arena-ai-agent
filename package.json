@@ -1,0 +1,33 @@
+{
+  "name": "arena-agent",
+  "version": "0.1.0",
+  "description": "Arena Agent — a terminal-based AI coding agent that lives in your editor's integrated terminal",
+  "license": "MIT",
+  "bin": {
+    "arena": "bin/arena.js"
+  },
+  "main": "src/cli.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "node test/smoke.js",
+    "demo": "bash scripts/demo.sh"
+  },
+  "keywords": [
+    "ai",
+    "coding",
+    "agent",
+    "cli",
+    "terminal",
+    "vscode",
+    "arena"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ]
+}

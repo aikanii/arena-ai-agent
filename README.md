@@ -50,41 +50,18 @@ Verify your setup:
 arena doctor
 ```
 
-## Connect your Arena AI account
+## Connect the intelligence
 
-No API keys to paste — sign in from the terminal:
-
-```
-$ arena login
-
-◆ Sign in to Arena AI  · connecting to https://api.arena.ai/v1
-
-  1. Open:  https://arena.ai/activate
-  2. Code:   ARENA-7Q4M (copied to clipboard)
-
-opening your browser…
-waiting for you to approve in the browser… (Ctrl+C to cancel)
-╭─ Signed in to Arena AI ─────────────────────────────
-│ ✓ account:  kai — kai@example.com  (pro)
-│   token:    saved to ~/.arena-agent/auth.json
-╰─────────────────────────────────────────────────────
-```
-
-`arena login` uses the OAuth **device flow**: the CLI shows a one-time code,
-opens the Arena AI activation page (any browser, any device — it also works
-over SSH and in containers), and waits for your approval. Once approved, the
-account token is stored in `~/.arena-agent/auth.json` (chmod 600) and used
-automatically everywhere.
+Arena Agent talks to an OpenAI-compatible chat-completions endpoint — by default the **Arena Agent API**:
 
 ```bash
-arena whoami     # which account is connected
-arena logout     # remove saved credentials
+export ARENA_API_KEY="your-key"
+# optional overrides
+export ARENA_BASE_URL="https://api.arena.ai/v1"
+export ARENA_MODEL="arena-agent"
 ```
 
-Prefer keys (CI/automation)? `ARENA_API_KEY` and `--api-key` still work and
-take precedence over the signed-in account. Any OpenAI-compatible endpoint
-works via `ARENA_BASE_URL`. No account at all? Try the fully offline bundled
-mock model:
+Any OpenAI-compatible server works (set `ARENA_BASE_URL`). No key yet? Try the fully offline bundled mock model:
 
 ```bash
 arena --mock "add authentication to this application"
@@ -98,8 +75,6 @@ arena "task"                interactive session seeded with a task
 arena -p "task"             one-shot (non-interactive) mode
 arena -c                    continue the most recent session
 arena --resume <id>         resume a specific session (arena sessions)
-arena login / logout        connect or disconnect your Arena AI account
-arena whoami                show the signed-in account
 arena init                  create ARENA.md project memory
 arena doctor                check configuration
 arena sessions              list saved sessions for this project
@@ -177,14 +152,12 @@ Precedence: CLI flags → environment → `.arena/settings.json` (project) → `
 // ~/.arena-agent/config.json
 {
   "baseUrl": "https://api.arena.ai/v1",
+  "apiKey": "…",            // env ARENA_API_KEY preferred
   "model": "arena-agent",
   "permissionMode": "default",
   "maxTurns": 40
 }
 ```
-
-Credential precedence: `--api-key` → `ARENA_API_KEY` → **signed-in account**
-(`arena login`, stored in `~/.arena-agent/auth.json`) → config-file keys.
 
 Environment: `ARENA_API_KEY`, `ARENA_BASE_URL`, `ARENA_MODEL`, `ARENA_PERMISSION_MODE`, `ARENA_MAX_TURNS`, `ARENA_SHELL`.
 
@@ -200,7 +173,6 @@ node mock/server.js 8420   # run the mock API standalone
 bin/arena.js        entrypoint
 src/cli.js          arg parsing, REPL, slash commands, subcommands
 src/agent.js        orchestration loop: stream → tools → verify → repeat
-src/auth.js         arena login — OAuth device flow + secure token store
 src/llm.js          Arena Agent API client (streaming, retries, fallbacks)
 src/prompts.js      system prompt & compaction prompt construction
 src/permissions.js  approval modes + session allow-rules

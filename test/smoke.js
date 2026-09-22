@@ -9,7 +9,8 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const http = require('http');
+const { spawnSync, spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'arena.js');
@@ -32,6 +33,35 @@ async function test(name, fn) {
 function tmpProject(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `arena-test-${name}-`));
   return dir;
+}
+
+/**
+ * Spawn a Node child that prints "PORT=<n>" once its server is listening.
+ * Needed because spawnSync blocks this process's event loop, so servers used
+ * by spawnSync'd CLIs must live in their own process.
+ */
+function startChildServer(script) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('child server did not report a port within 10s'));
+    }, 10000);
+    child.stdout.on('data', (d) => {
+      out += d.toString();
+      const m = out.match(/PORT=(\d+)/);
+      if (m) {
+        clearTimeout(timer);
+        resolve({ port: Number(m[1]), child });
+      }
+    });
+    child.stderr.on('data', (d) => process.stderr.write('[child-server] ' + d));
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error('child server exited early: ' + code));
+    });
+  });
 }
 
 async function main() {
@@ -203,6 +233,97 @@ async function main() {
 
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  await test('anthropic conversion: system, tool_use blocks, merged tool_results', () => {
+    const { toAnthropicMessages, toAnthropicTools } = require('../src/providers');
+    const { system, messages } = toAnthropicMessages([
+      { role: 'system', content: 'SYS' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'let me see', tool_calls: [{ id: 't1', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] },
+      { role: 'tool', tool_call_id: 't1', name: 'read_file', content: 'FILE' },
+      { role: 'tool', tool_call_id: 't2', name: 'x', content: 'Y' },
+      { role: 'assistant', content: 'done' },
+    ]);
+    assert.strictEqual(system, 'SYS');
+    assert.deepStrictEqual(messages[0], { role: 'user', content: 'hi' });
+    assert.strictEqual(messages[1].role, 'assistant');
+    assert.deepStrictEqual(messages[1].content[1], { type: 'tool_use', id: 't1', name: 'read_file', input: { path: 'a' } });
+    // consecutive tool results merge into ONE user turn (Anthropic requirement)
+    assert.strictEqual(messages[2].role, 'user');
+    assert.strictEqual(messages[2].content.length, 2);
+    assert.strictEqual(messages[2].content[0].tool_use_id, 't1');
+    assert.strictEqual(messages[2].content[1].tool_use_id, 't2');
+    const tools = toAnthropicTools([{ function: { name: 'read_file', description: 'd', parameters: { type: 'object' } } }]);
+    assert.deepStrictEqual(tools[0], { name: 'read_file', description: 'd', input_schema: { type: 'object' } });
+  });
+
+  await test('anthropic e2e: agent loop over /v1/messages (mock gateway)', async () => {
+    // Mock server runs as a CHILD process — spawnSync blocks this process's
+    // event loop, so an in-process server could never answer.
+    const script = `require(${JSON.stringify(path.join(ROOT, 'mock', 'server.js'))}).startMockServer(0).then(s => console.log('PORT=' + s.port));`;
+    const srv = await startChildServer(script);
+    const dir = tmpProject('anth');
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'e2e-anth' }));
+    const env = { ...process.env, FORCE_COLOR: '0', ARENA_BASE_URL: `http://127.0.0.1:${srv.port}`, ARENA_PROVIDER: 'anthropic', ARENA_API_KEY: 'mock-key' };
+    try {
+      const r = spawnSync(process.execPath, [BIN, '--full-auto', '-p', 'add authentication'], {
+        cwd: dir, env, encoding: 'utf8', timeout: 90000,
+      });
+      assert.strictEqual(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
+      assert.ok(fs.existsSync(path.join(dir, 'src', 'auth.js')), 'agent should create src/auth.js over the Anthropic protocol');
+      assert.ok(/Done\./.test(r.stdout), 'final summary printed');
+      assert.ok(r.stdout.includes('PASS'), 'verification output visible');
+    } finally {
+      srv.child.kill();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await test('login falls back to API-key paste when device flow is unavailable (405)', async () => {
+    // Mini "gateway" (child process): rejects device flow, accepts message pings.
+    const script = `
+      const http = require('http');
+      const srv = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/oauth/device/code') {
+          res.writeHead(405, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'method not allowed' }));
+          return;
+        }
+        if (req.method === 'POST' && req.url === '/v1/messages') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }));
+          return;
+        }
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+      });
+      srv.listen(0, '127.0.0.1', () => console.log('PORT=' + srv.address().port));
+    `;
+    const srv = await startChildServer(script);
+    try {
+      const dir = tmpProject('tokenlogin');
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-home-tok-'));
+      const env = { ...process.env, HOME: home, FORCE_COLOR: '0' };
+      delete env.ARENA_API_KEY;
+
+      const r = spawnSync(
+        process.execPath,
+        [BIN, 'login', '--base-url', `http://127.0.0.1:${srv.port}`, '--provider', 'anthropic', '--no-browser'],
+        { cwd: dir, env, encoding: 'utf8', timeout: 60000, input: 'sk-arena-test-123\n' }
+      );
+      assert.strictEqual(r.status, 0, `exit ${r.status}\n${r.stdout}\n${r.stderr}`);
+      assert.ok(/falling back|api key sign-in/i.test(r.stdout), 'should announce the fallback');
+      const creds = JSON.parse(fs.readFileSync(path.join(home, '.arena-agent', 'auth.json'), 'utf8'));
+      assert.strictEqual(creds.accessToken, 'sk-arena-test-123');
+      assert.strictEqual(creds.endpoint, `http://127.0.0.1:${srv.port}`);
+      assert.ok(/signed in/i.test(r.stdout));
+
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    } finally {
+      srv.child.kill();
+    }
   });
 
   await test('CLI help and version work', () => {

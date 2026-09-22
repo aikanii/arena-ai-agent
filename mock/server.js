@@ -64,78 +64,37 @@ function taskEcho(messages) {
   return lastUser ? String(lastUser.content).slice(0, 120).replace(/\n/g, ' ') : '(no task)';
 }
 
-function pickResponse(messages) {
-  const step = messages.filter((m) => m.role === 'tool').length;
-  const task = taskEcho(messages);
-
+function pickSpec(step, task) {
   switch (step) {
     case 0:
       return {
-        tool_calls: [
-          {
-            id: 'mock_call_plan',
-            type: 'function',
-            function: {
-              name: 'update_plan',
-              arguments: JSON.stringify({
-                todos: [
-                  { content: `Understand task: ${task}`, status: 'done' },
-                  { content: 'Implement auth module (src/auth.js)', status: 'in_progress' },
-                  { content: 'Verify with a smoke test', status: 'pending' },
-                ],
-              }),
-            },
-          },
-        ],
+        tool: 'update_plan',
+        input: {
+          todos: [
+            { content: `Understand task: ${task}`, status: 'done' },
+            { content: 'Implement auth module (src/auth.js)', status: 'in_progress' },
+            { content: 'Verify with a smoke test', status: 'pending' },
+          ],
+        },
       };
     case 1:
-      return {
-        tool_calls: [
-          {
-            id: 'mock_call_write',
-            type: 'function',
-            function: {
-              name: 'write_file',
-              arguments: JSON.stringify({ path: AUTH_FILE, content: AUTH_MODULE }),
-            },
-          },
-        ],
-      };
+      return { tool: 'write_file', input: { path: AUTH_FILE, content: AUTH_MODULE } };
     case 2:
-      return {
-        tool_calls: [
-          {
-            id: 'mock_call_run',
-            type: 'function',
-            function: {
-              name: 'run_command',
-              arguments: JSON.stringify({ command: AUTH_TEST_CMD, description: 'smoke-test the auth module' }),
-            },
-          },
-        ],
-      };
+      return { tool: 'run_command', input: { command: AUTH_TEST_CMD, description: 'smoke-test the auth module' } };
     case 3:
       return {
-        tool_calls: [
-          {
-            id: 'mock_call_plan2',
-            type: 'function',
-            function: {
-              name: 'update_plan',
-              arguments: JSON.stringify({
-                todos: [
-                  { content: `Understand task: ${task}`, status: 'done' },
-                  { content: 'Implement auth module (src/auth.js)', status: 'done' },
-                  { content: 'Verify with a smoke test', status: 'done' },
-                ],
-              }),
-            },
-          },
-        ],
+        tool: 'update_plan',
+        input: {
+          todos: [
+            { content: `Understand task: ${task}`, status: 'done' },
+            { content: 'Implement auth module (src/auth.js)', status: 'done' },
+            { content: 'Verify with a smoke test', status: 'done' },
+          ],
+        },
       };
     default:
       return {
-        content:
+        text:
           `Done. I added a small authentication module for the task: "${task}".\n\n` +
           'What changed:\n' +
           `- Created ${AUTH_FILE} with register/login/verify/logout backed by crypto.scrypt password hashing and opaque session tokens.\n\n` +
@@ -144,6 +103,78 @@ function pickResponse(messages) {
           'Next steps you may want: wire the module into your HTTP routes, add persistent storage, and add real tests. (Note: this reply came from the bundled offline mock — point ARENA_BASE_URL/Arena_API_KEY at the real Arena Agent API for full intelligence.)',
       };
   }
+}
+
+function pickResponse(messages) {
+  const step = messages.filter((m) => m.role === 'tool').length;
+  const task = taskEcho(messages);
+  const spec = pickSpec(step, task);
+  if (spec.text) return { content: spec.text };
+  return {
+    tool_calls: [
+      {
+        id: `mock_call_${spec.tool}_${step}`,
+        type: 'function',
+        function: { name: spec.tool, arguments: JSON.stringify(spec.input) },
+      },
+    ],
+  };
+}
+
+/* ---------------- Anthropic Messages API (/v1/messages) ------------- */
+
+function countAnthropicToolResults(messages) {
+  let n = 0;
+  for (const m of messages || []) {
+    if (Array.isArray(m.content)) {
+      for (const b of m.content) if (b && b.type === 'tool_result') n++;
+    }
+  }
+  return n;
+}
+
+function anthropicTaskEcho(messages) {
+  for (const m of messages || []) {
+    if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+      return String(m.content).slice(0, 120).replace(/\n/g, ' ');
+    }
+  }
+  return '(no task)';
+}
+
+function anthropicMessage(spec) {
+  const content = [];
+  if (spec.text) content.push({ type: 'text', text: spec.text });
+  if (spec.tool) {
+    content.push({ type: 'tool_use', id: `mock_tool_${spec.tool}`, name: spec.tool, input: spec.input });
+  }
+  return content;
+}
+
+function anthropicEvents(content, model) {
+  const events = [];
+  events.push({
+    type: 'message_start',
+    message: { id: 'mock_msg', type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 1200, output_tokens: 1 } },
+  });
+  content.forEach((block, index) => {
+    events.push({ type: 'content_block_start', index, content_block: block.type === 'text' ? { type: 'text', text: '' } : { type: 'tool_use', id: block.id, name: block.name, input: {} } });
+    if (block.type === 'text') {
+      for (let i = 0; i < block.text.length; i += 14) {
+        events.push({ type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text.slice(i, i + 14) } });
+      }
+    } else {
+      const js = JSON.stringify(block.input);
+      for (let i = 0; i < js.length; i += 48) {
+        events.push({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: js.slice(i, i + 48) } });
+      }
+    }
+    events.push({ type: 'content_block_stop', index });
+  });
+  const stopReason = content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
+  events.push({ type: 'message_delta', delta: { stop_reason: stopReason }, usage: { output_tokens: 90 } });
+  events.push({ type: 'message_stop' });
+  return events;
 }
 
 /* ------------------------------------------------------------------ */
@@ -267,6 +298,56 @@ function startMockServer(port = 0) {
       }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ email: 'dev@arena.ai', name: 'Arena Developer', plan: 'pro' }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/messages') {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body || '{}');
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ type: 'error', error: { message: 'bad JSON' } }));
+          return;
+        }
+        const step = countAnthropicToolResults(parsed.messages);
+        const task = anthropicTaskEcho(parsed.messages);
+        const spec = pickSpec(step, task);
+        const content = anthropicMessage(spec);
+        const model = parsed.model || 'coding-router-preview';
+        const finish = content.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
+
+        if (!parsed.stream) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              id: 'mock-msg-' + Date.now(),
+              type: 'message',
+              role: 'assistant',
+              model,
+              content,
+              stop_reason: finish,
+              usage: { input_tokens: 1200, output_tokens: 90 },
+            })
+          );
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        const events = anthropicEvents(content, model);
+        let i = 0;
+        const timer = setInterval(() => {
+          if (i >= events.length) {
+            clearInterval(timer);
+            res.end();
+            return;
+          }
+          const ev = events[i++];
+          res.write(`event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`);
+        }, 5);
+      });
       return;
     }
 

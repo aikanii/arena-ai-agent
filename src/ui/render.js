@@ -206,15 +206,18 @@ function turnStats({ tokens, ms }) {
 
 function signedOut() {
   box('Connect your Arena AI account', [
-    'Sign in from the terminal (opens the Arena AI activation page):',
+    'Sign in from the terminal:',
     '',
     '  ' + style.bold('arena login'),
+    '',
+    'On the Arena gateway this opens the Keys page in your browser:',
+    '  https://portal.api.preview.arena.ai/dashboard/keys',
+    'then you paste your key (input is hidden).',
     '',
     'No account handy? Try the bundled offline mock model:',
     '  arena --mock "your task"',
     '',
-    'Power users / CI: an API key still works:',
-    '  export ARENA_API_KEY="your-key"',
+    'Power users / CI:  export ARENA_API_KEY="your-key"',
     '',
     'Check your setup anytime:  arena doctor',
   ], style.yellow);

@@ -25,8 +25,9 @@ ${style.bold('USAGE')}
   arena <command>           Run a subcommand (login, logout, whoami, init, doctor, sessions)
 
 ${style.bold('ACCOUNT')}
-  arena login               Sign in to your Arena AI account (opens the activation
-                            page in your browser; enter the shown code to approve)
+  arena login               Sign in to Arena AI. Uses device flow where supported;
+                            on the Arena gateway it opens the Keys page in your
+                            browser and asks you to paste your Arena key (hidden input).
       --no-browser          Don't try to open a browser automatically
   arena whoami              Show which Arena AI account is connected
   arena logout              Remove saved credentials
@@ -39,8 +40,11 @@ ${style.bold('OPTIONS')}
       --auto-edit           Auto-approve file edits; still ask for commands
       --full-auto           Auto-approve everything (same as --dangerously-skip-permissions)
       --mode <mode>         Permission mode: plan | default | acceptEdits | fullAuto
-      --model <name>        Model to use (default: arena-agent)
-      --base-url <url>      API base URL (default: https://arena.ai/agent/v1)
+      --model <name>        Model (Arena gateway default: coding-router-preview)
+      --provider <p>        Wire protocol: anthropic | openai (auto-detected;
+                            arena.ai hosts use anthropic)
+      --base-url <url>      API endpoint (default: https://api.preview.arena.ai,
+                            the Arena gateway root)
       --api-key <key>       Use an API key instead of a signed-in account (CI)
       --mock                Use the bundled offline mock model (no network)
       --max-turns <n>       Tool-step limit per user turn (default 40)
@@ -49,8 +53,8 @@ ${style.bold('OPTIONS')}
   -h, --help                Show this help
 
 ${style.bold('ENVIRONMENT')}
-  ARENA_API_KEY, ARENA_BASE_URL, ARENA_MODEL, ARENA_PERMISSION_MODE,
-  ARENA_MAX_TURNS, ARENA_SHELL
+  ARENA_API_KEY, ARENA_BASE_URL, ARENA_MODEL, ARENA_PROVIDER,
+  ARENA_PERMISSION_MODE, ARENA_MAX_TURNS, ARENA_SHELL
 
 ${style.bold('EXAMPLES')}
   arena login
@@ -84,6 +88,7 @@ function parseArgs(argv) {
       case '--full-auto': case '--dangerously-skip-permissions': case '--yolo': flags.fullAuto = true; break;
       case '--mode': [flags.mode, i] = takeValue(a, i, 'default'); break;
       case '--model': [flags.model, i] = takeValue(a, i, ''); break;
+      case '--provider': [flags.provider, i] = takeValue(a, i, ''); break;
       case '--base-url': [flags.baseUrl, i] = takeValue(a, i, ''); break;
       case '--api-key': [flags.apiKey, i] = takeValue(a, i, ''); break;
       case '--mock': flags.mock = true; break;
@@ -469,8 +474,9 @@ async function cmdLogin(flags, overrides) {
   const config = resolveConfig(flags, process.cwd(), overrides);
 
   const existing = auth.loadCredentials();
-  if (existing && existing.account && existing.account.email) {
-    render.info(`already signed in as ${existing.account.email} — signing in again replaces the saved credentials.`);
+  if (existing && existing.accessToken) {
+    const who = existing.account && (existing.account.email || existing.account.name);
+    render.info(`already signed in${who ? ' as ' + who : ''} — signing in again replaces the saved credentials.`);
   }
 
   render.print('');
@@ -507,8 +513,82 @@ async function cmdLogin(flags, overrides) {
     });
   } catch (err) {
     if (spinner) spinner.stop();
+    const s = err.status;
+    if (s === 401 || s === 403 || s === 404 || s === 405) {
+      render.info('device sign-in is not available at this endpoint — using API key sign-in instead.');
+      render.print('');
+      return tokenSignIn(config, flags);
+    }
     render.error(err.message);
     process.exitCode = 1;
+  }
+}
+
+/**
+ * Fallback sign-in: open the Arena Keys page, let the user paste a key
+ * (hidden input), validate it against the endpoint, and store it.
+ */
+async function tokenSignIn(config, flags) {
+  const auth = require('./auth');
+  const { Spinner } = require('./ui/spinner');
+  const terminal = new TerminalInput();
+  try {
+    if (isArenaHost(config.baseUrl)) {
+      const keysUrl = keysPageFor(config.baseUrl);
+      render.print(`  ${style.bold('1.')} Create a key:  ${style.cyan(style.underline(keysUrl))}`);
+      if (!flags.noBrowser) {
+        const opened = auth.openUrl(keysUrl);
+        render.info(opened ? 'opening your browser…' : 'open the URL above in your browser');
+      }
+      render.print(`  ${style.bold('2.')} Paste the key below — input is hidden, the key is stored locally only`);
+    } else {
+      render.print(`  This endpoint does not support device sign-in.`);
+      render.print(`  Paste an API key for ${style.cyan(config.baseUrl)} below (input is hidden):`);
+    }
+    render.print('');
+
+    const entry = await terminal.readLine('  key ▸ ', { hidden: true });
+    if (entry === terminal.EOF || entry === terminal.SIGINT || !String(entry).trim()) {
+      render.warn('sign-in cancelled');
+      process.exitCode = 1;
+      return;
+    }
+    const apiKey = String(entry).trim();
+
+    const spinner = new Spinner('validating key…').start();
+    const provider = makeProvider({ ...config, apiKey });
+    const r = await provider.ping();
+    spinner.stop();
+
+    if (!r.ok) {
+      if (config.provider === 'anthropic') {
+        render.error(`key rejected by ${config.baseUrl} — ${r.detail}`);
+        render.info('create a fresh key at ' + keysPageFor(config.baseUrl) + ' and try again.');
+        process.exitCode = 1;
+        return;
+      }
+      render.warn(`could not verify the key (${r.detail}) — saving it anyway.`);
+    }
+
+    auth.saveCredentials({
+      accessToken: apiKey,
+      refreshToken: null,
+      expiresAt: null,
+      tokenType: 'Bearer',
+      endpoint: config.baseUrl,
+      obtainedAt: new Date().toISOString(),
+      account: { name: 'Arena API key', email: null },
+    });
+
+    render.signedInBox({
+      name: 'Arena API key',
+      email: null,
+      plan: null,
+      endpoint: config.baseUrl,
+    });
+    if (r.ok) render.info(`validated — ${r.detail}`);
+  } finally {
+    terminal.close();
   }
 }
 
@@ -644,16 +724,11 @@ async function cmdDoctor(flags, overrides = {}) {
   }
 
   if (config.apiKey) {
-    const client = new LLMClient({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model });
-    try {
-      const models = await client.listModels();
-      const ids = (models.data || []).map((m) => m.id).slice(0, 8).join(', ') || '(no list)';
-      render.print(`  ${style.green('✓')} api reachable: ${ids}`);
-    } catch (err) {
-      render.print(`  ${style.red('✗')} api check failed: ${err.message}`);
-    }
+    const provider = makeProvider(config);
+    const r = await provider.ping();
+    if (r.ok) render.print(`  ${style.green('✓')} api reachable (${config.provider}): ${r.detail}`);
+    else render.print(`  ${style.red('✗')} api check failed: ${r.detail}`);
   }
 }
 
 module.exports = { main };
-  

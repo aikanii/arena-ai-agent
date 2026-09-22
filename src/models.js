@@ -8,7 +8,20 @@
 
 const DEFAULT_MODEL = 'arena-agent';
 
+/** Default model when talking to the Arena gateway (the coding router). */
+const ARENA_DEFAULT_MODEL = 'coding-router-preview';
+
 const MODELS = {
+  'coding-router-preview': {
+    label: 'Arena Coding Router (preview)',
+    contextWindow: 200000,
+    maxOutputTokens: 16384,
+  },
+  'claude-coding-router-preview': {
+    label: 'Arena Coding Router (Claude Desktop name)',
+    contextWindow: 200000,
+    maxOutputTokens: 16384,
+  },
   'arena-agent': {
     label: 'Arena Agent (flagship)',
     contextWindow: 200000,
@@ -32,4 +45,4 @@ function getModel(name) {
   return { name, label: name, contextWindow: 128000, maxOutputTokens: 8192 };
 }
 
-module.exports = { DEFAULT_MODEL, MODELS, getModel };
+module.exports = { DEFAULT_MODEL, ARENA_DEFAULT_MODEL, MODELS, getModel };

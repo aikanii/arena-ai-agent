@@ -26,10 +26,10 @@ function truncateForModel(text) {
 
 class Agent {
   /**
-   * @param {object} opts { client, config, permissions, store, session, ctxInfo }
+   * @param {object} opts { provider, config, permissions, store, session, ctxInfo, input }
    */
-  constructor({ client, config, permissions, store, session, ctxInfo, input }) {
-    this.client = client;
+  constructor({ provider, config, permissions, store, session, ctxInfo, input }) {
+    this.provider = provider;
     this.config = config;
     this.permissions = permissions;
     this.store = store;
@@ -168,7 +168,6 @@ class Agent {
   /* ------------------------------------------------------------ */
 
   async streamOnce() {
-    const messages = [{ role: 'system', content: this.systemPrompt() }, ...this.session.messages];
     const toolDefs = tools.definitions(this.permissions.mode);
 
     let text = '';
@@ -180,39 +179,37 @@ class Agent {
     let firstToken = true;
 
     try {
-      for await (const chunk of this.client.stream({
-        messages,
+      for await (const ev of this.provider.streamNormalized({
+        system: this.systemPrompt(),
+        messages: this.session.messages,
         tools: toolDefs,
         temperature: this.config.temperature,
         maxTokens: this.modelInfo.maxOutputTokens,
         signal: this.ac.signal,
       })) {
-        if (chunk.usage) usage = chunk.usage;
-        const ch = chunk.choices && chunk.choices[0];
-        if (!ch) continue;
-        const d = ch.delta || {};
-        if (typeof d.content === 'string' && d.content.length) {
+        if (ev.type === 'usage') {
+          usage = { prompt_tokens: ev.promptTokens, completion_tokens: ev.completionTokens };
+          continue;
+        }
+        if (ev.type === 'text') {
           if (firstToken) {
             spinner.stop();
             firstToken = false;
             started = true;
             render.assistantStart();
           }
-          text += d.content;
-          render.assistantDelta(d.content);
+          text += ev.text;
+          render.assistantDelta(ev.text);
+          continue;
         }
-        if (Array.isArray(d.tool_calls)) {
-          for (const tc of d.tool_calls) {
-            const i = Number.isInteger(tc.index) ? tc.index : 0;
-            const a = acc.get(i) || { id: '', name: '', args: '' };
-            if (tc.id) a.id = tc.id;
-            if (tc.function && tc.function.name) a.name += tc.function.name;
-            if (tc.function && tc.function.arguments) a.args += tc.function.arguments;
-            acc.set(i, a);
-          }
-          if (firstToken) {
-            spinner.update('planning tool calls…');
-          }
+        if (ev.type === 'toolcall') {
+          const i = Number.isInteger(ev.index) ? ev.index : 0;
+          const a = acc.get(i) || { id: '', name: '', args: '' };
+          if (ev.id) a.id = ev.id;
+          if (ev.nameDelta) a.name += ev.nameDelta;
+          if (ev.argsDelta) a.args += ev.argsDelta;
+          acc.set(i, a);
+          if (firstToken) spinner.update('planning tool calls…');
         }
       }
     } finally {
@@ -347,15 +344,13 @@ class Agent {
         })
         .join('\n\n');
 
-      const res = await this.client.chat({
-        messages: [
-          { role: 'system', content: COMPACT_SYSTEM },
-          { role: 'user', content: compactRequest(transcript.slice(0, 120000)) },
-        ],
+      const res = await this.provider.complete({
+        system: COMPACT_SYSTEM,
+        userText: compactRequest(transcript.slice(0, 120000)),
         temperature: 0.1,
         maxTokens: 4096,
       });
-      const summary = res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content;
+      const summary = res && res.text;
       if (!summary) throw new Error('empty summary');
       this.session.messages = [
         { role: 'user', content: `[Context summary of the earlier conversation]\n${summary}` },

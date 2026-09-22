@@ -1,0 +1,18 @@
+{
+    "sourceFile": "src/models.js",
+    "activeCommit": 0,
+    "commits": [
+        {
+            "activePatchIndex": 0,
+            "patches": [
+                {
+                    "date": 1790042455048,
+                    "content": "Index: \n===================================================================\n--- \n+++ \n"
+                }
+            ],
+            "date": 1790042455048,
+            "name": "Commit-0",
+            "content": "'use strict';\n\n/**\n * Model registry for the Arena Agent API.\n * Unknown model names fall back to conservative defaults so any\n * OpenAI-compatible endpoint/model can be pointed at this CLI.\n */\n\nconst DEFAULT_MODEL = 'arena-agent';\n\n/** Default model when talking to the Arena gateway (the coding router). */\nconst ARENA_DEFAULT_MODEL = 'coding-router-preview';\n\nconst MODELS = {\n  'coding-router-preview': {\n    label: 'Arena Coding Router (preview)',\n    contextWindow: 200000,\n    maxOutputTokens: 16384,\n  },\n  'claude-coding-router-preview': {\n    label: 'Arena Coding Router (Claude Desktop name)',\n    contextWindow: 200000,\n    maxOutputTokens: 16384,\n  },\n  'arena-agent': {\n    label: 'Arena Agent (flagship)',\n    contextWindow: 200000,\n    maxOutputTokens: 16384,\n  },\n  'arena-agent-fast': {\n    label: 'Arena Agent Fast',\n    contextWindow: 200000,\n    maxOutputTokens: 8192,\n  },\n  'arena-agent-mini': {\n    label: 'Arena Agent Mini',\n    contextWindow: 128000,\n    maxOutputTokens: 8192,\n  },\n};\n\nfunction getModel(name) {\n  const m = MODELS[name];\n  if (m) return { name, ...m };\n  return { name, label: name, contextWindow: 128000, maxOutputTokens: 8192 };\n}\n\nmodule.exports = { DEFAULT_MODEL, ARENA_DEFAULT_MODEL, MODELS, getModel };\n"
+        }
+    ]
+}

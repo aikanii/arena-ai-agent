@@ -8,6 +8,7 @@ const { style } = require('./ui/ansi');
 const { TerminalInput } = require('./ui/prompt');
 const { resolveConfig } = require('./config');
 const { LLMClient } = require('./llm');
+const { makeProvider, keysPageFor, isArenaHost } = require('./providers');
 const { getModel, MODELS } = require('./models');
 const { Permissions, MODES } = require('./permissions');
 const { SessionStore } = require('./session');
@@ -180,7 +181,7 @@ async function runAgent(flags, root, overrides, mockServer) {
   }
 
   const isTTY = !!process.stdin.isTTY && !!process.stdout.isTTY;
-  const client = new LLMClient({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model });
+  const provider = makeProvider(config);
   const terminal = new TerminalInput();
   const permissions = new Permissions({ mode: config.mode, interactive: isTTY && !flags.print, terminal });
   const store = new SessionStore(root);
@@ -199,7 +200,7 @@ async function runAgent(flags, root, overrides, mockServer) {
   session.model = config.model;
   session.mode = config.mode;
 
-  const agent = new Agent({ client, config, permissions, store, session, ctxInfo, input: terminal });
+  const agent = new Agent({ provider, config, permissions, store, session, ctxInfo, input: terminal });
 
   const promptText = flags.positional.join(' ').trim();
   const interactive = !flags.print && isTTY;
@@ -655,3 +656,4 @@ async function cmdDoctor(flags, overrides = {}) {
 }
 
 module.exports = { main };
+  

@@ -2,7 +2,7 @@
 
 const pkg = require('../package.json');
 
-const DEFAULT_BASE_URL = 'https://arena.ai/agent/v1';
+const DEFAULT_BASE_URL = 'https://api.preview.arena.ai'; // Arena gateway root (Anthropic protocol; no /v1 suffix)
 
 class ApiError extends Error {
   constructor(message, status) {

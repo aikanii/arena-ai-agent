@@ -103,7 +103,9 @@ async function requestDeviceCode(baseUrl) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.device_code) {
-    throw new AuthError(`Device authorization failed (${res.status}${data.error_description ? ': ' + data.error_description : ''}).`);
+    const err = new AuthError(`Device authorization failed (${res.status}${data.error_description ? ': ' + data.error_description : ''}).`);
+    err.status = res.status;
+    throw err;
   }
   return data;
 }

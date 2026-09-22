@@ -4,9 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const { homeDir } = require('./session');
 const { DEFAULT_BASE_URL } = require('./llm');
-const { DEFAULT_MODEL } = require('./models');
+const { DEFAULT_MODEL, ARENA_DEFAULT_MODEL } = require('./models');
 const { normalizeMode } = require('./permissions');
 const { getStoredToken, loadCredentials } = require('./auth');
+const { detectProtocol, isArenaHost } = require('./providers');
 
 function readJson(p) {
   try {
@@ -53,7 +54,12 @@ function resolveConfig(flags = {}, root = process.cwd(), overrides = {}) {
   }
   const account = authSource === 'login' ? (loadCredentials() || {}).account || null : null;
 
-  const model = pick(flags.model, process.env.ARENA_MODEL, projectCfg.model, globalCfg.model, DEFAULT_MODEL);
+  // Wire protocol: explicit override > host detection (arena.ai ⇒ Anthropic).
+  const providerOverride = flags.provider || process.env.ARENA_PROVIDER || projectCfg.provider || globalCfg.provider || '';
+  const provider = detectProtocol(baseUrl, providerOverride);
+
+  const defaultModel = isArenaHost(baseUrl) ? ARENA_DEFAULT_MODEL : DEFAULT_MODEL;
+  const model = pick(flags.model, process.env.ARENA_MODEL, projectCfg.model, globalCfg.model, defaultModel);
 
   let mode = 'default';
   if (flags.mode) mode = normalizeMode(flags.mode);
@@ -69,6 +75,7 @@ function resolveConfig(flags = {}, root = process.cwd(), overrides = {}) {
     apiKey,
     authSource,
     account,
+    provider,
     model,
     mode,
     mock: !!(flags.mock || process.env.ARENA_MOCK === '1'),

@@ -274,8 +274,9 @@ class TerminalInput {
   finishEntry() {
     const e = this.entry;
     const value = e.full + e.buffer;
+    const hidden = !!(this.resolver && this.resolver.hidden);
     this.clearEntry();
-    if (value.trim()) {
+    if (value.trim() && !hidden) {
       this.history.push(value);
       if (this.history.length > 200) this.history.shift();
     }
@@ -296,24 +297,28 @@ class TerminalInput {
   redraw() {
     if (!this.resolver || !this.tty) return;
     const prompt = this.entry.full ? this.resolver.cont : this.resolver.main;
+    if (this.resolver.hidden) {
+      process.stdout.write('\r\x1b[2K' + prompt + style.gray('•'.repeat(Math.min(this.entry.buffer.length, 24))));
+      return;
+    }
     process.stdout.write('\r\x1b[2K' + prompt + this.entry.buffer.replace(/\n/g, '⏎'));
   }
 
   /* ------------------------------------------------------------- */
 
-  /** Read one user entry. Resolves string | EOF | SIGINT. */
-  readLine(prompt) {
+  /** Read one user entry. Resolves string | EOF | SIGINT. With {hidden:true} input is not echoed (secrets). */
+  readLine(prompt, { hidden = false } = {}) {
     if (!this.tty) return this.readLinePiped();
     this.attach();
 
-    if (this.pendingLines.length) {
+    if (this.pendingLines.length && !hidden) {
       const v = this.pendingLines.shift();
       process.stdout.write(style.bold(style.purple(prompt)) + v.split('\n')[0].slice(0, 200) + '\n');
       return Promise.resolve(v);
     }
 
     return new Promise((resolve) => {
-      this.resolver = { resolve, main: style.bold(style.purple(prompt)), cont: style.dim('⋮ ') };
+      this.resolver = { resolve, main: style.bold(style.purple(prompt)), cont: style.dim('⋮ '), hidden };
       this.entry.histIdx = this.history.length;
       this.redraw();
     });

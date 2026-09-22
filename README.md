@@ -162,9 +162,9 @@ Arena Agent uses the **OAuth 2.0 Device Authorization Grant** ([RFC 8628](https:
 ```text
 $ arena login
 
-◆ Sign in to Arena AI  · connecting to https://arena.ai/agent/v1
+◆ Sign in to Arena AI  · connecting to https://api.arena.ai/v1
 
-  1. Open:  https://arena.ai/agent
+  1. Open:  https://api.arena.ai/activate
   2. Code:   ARENA-7Q4M (copied to clipboard)
 
 opening your browser…
@@ -184,11 +184,11 @@ The CLI talks to a single host. Everything is derived from the API base URL — 
 
 | Purpose | URL |
 | :--- | :--- |
-| **API base URL** (chat completions, models) | `https://arena.ai/agent/v1` |
-| Device code — `POST /oauth/device/code` | `https://arena.ai/agent/oauth/device/code` |
-| Token exchange / polling — `POST /oauth/token` | `https://arena.ai/agent/oauth/token` |
-| **Confirmation page** (opened in your browser) | `https://arena.ai/agent` |
-| Account info — `GET /me` | `https://arena.ai/agent/me` |
+| **API base URL** (chat completions, models) | `https://api.arena.ai/v1` |
+| Device code — `POST /oauth/device/code` | `https://api.arena.ai/oauth/device/code` |
+| Token exchange / polling — `POST /oauth/token` | `https://api.arena.ai/oauth/token` |
+| Activation page (opened in your browser) | `https://api.arena.ai/activate` |
+| Account info — `GET /me` | `https://api.arena.ai/me` |
 
 | Command | Description |
 | :--- | :--- |
@@ -265,7 +265,7 @@ arena --full-auto "get the test suite green"        # everything auto-approved
 | `--full-auto` | Auto-approve everything (alias: `--dangerously-skip-permissions`) |
 | `--mode <m>` | Permission mode: `plan` \| `default` \| `acceptEdits` \| `fullAuto` |
 | `--model <name>` | Model to use (default `arena-agent`) |
-| `--base-url <url>` | API base URL (default `https://arena.ai/agent/v1`) |
+| `--base-url <url>` | API base URL (default `https://api.arena.ai/v1`) |
 | `--api-key <key>` | Use an API key instead of the signed-in account |
 | `--mock` | Use the bundled offline mock model (no network) |
 | `--max-turns <n>` | Tool-step limit per user turn (default `40`) |
@@ -419,7 +419,7 @@ Sessions store messages, the current plan, model/mode, and token usage. Long con
 
 ```jsonc
 {
-  "baseUrl": "https://arena.ai/agent/v1",
+  "baseUrl": "https://api.arena.ai/v1",
   "model": "arena-agent",
   "permissionMode": "default",   // plan | default | acceptEdits | fullAuto
   "maxTurns": 40,

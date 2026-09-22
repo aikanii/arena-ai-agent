@@ -2,7 +2,7 @@
 
 const pkg = require('../package.json');
 
-const DEFAULT_BASE_URL = 'https://api.arena.ai/v1';
+const DEFAULT_BASE_URL = 'https://arena.ai/agent/v1';
 
 class ApiError extends Error {
   constructor(message, status) {

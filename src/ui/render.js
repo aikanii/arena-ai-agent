@@ -204,21 +204,31 @@ function turnStats({ tokens, ms }) {
   if (parts.length) print(style.gray('  ' + parts.join(' · ')));
 }
 
-function missingKey() {
-  box('No API key configured', [
-    'Arena Agent gets its intelligence from the Arena Agent API.',
+function signedOut() {
+  box('Connect your Arena AI account', [
+    'Sign in from the terminal (opens the Arena AI activation page):',
     '',
-    'Set your key, then run again:',
+    '  ' + style.bold('arena login'),
+    '',
+    'No account handy? Try the bundled offline mock model:',
+    '  arena --mock "your task"',
+    '',
+    'Power users / CI: an API key still works:',
     '  export ARENA_API_KEY="your-key"',
     '',
-    'Or point the CLI at any OpenAI-compatible endpoint:',
-    '  export ARENA_BASE_URL="https://api.example.com/v1"',
+    'Check your setup anytime:  arena doctor',
+  ], style.yellow);
+}
+
+function signedInBox({ name, email, plan, endpoint }) {
+  const who = [name, email].filter(Boolean).join(' — ') || 'unknown account';
+  box('Signed in to Arena AI', [
+    `${style.green('✓')} account:  ${style.bold(who)}${plan ? style.gray('  (' + plan + ')') : ''}`,
+    `  endpoint: ${endpoint}`,
+    `  token:    saved to ~/.arena-agent/auth.json`,
     '',
-    'Try it offline with the bundled mock model:',
-    '  arena --mock',
-    '',
-    'Run `arena doctor` to check your configuration.',
-  ], style.red);
+    `Run ${style.bold('arena')} in any project directory to start coding.`,
+  ], style.green);
 }
 
 module.exports = {
@@ -239,5 +249,6 @@ module.exports = {
   box,
   printInterrupted,
   turnStats,
-  missingKey,
+  signedOut,
+  signedInBox,
 };

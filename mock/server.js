@@ -187,7 +187,89 @@ function messageToEvents(msg) {
 }
 
 function startMockServer(port = 0) {
+  // Device-flow state (auto-approves after a couple of polls so scripted
+  // runs complete without a human in the browser).
+  const device = { code: null, userCode: null, polls: 0 };
+
   const server = http.createServer((req, res) => {
+    /* ---------------- OAuth device flow ---------------- */
+    if (req.method === 'POST' && req.url === '/oauth/device/code') {
+      device.code = 'mock-device-' + Date.now();
+      device.userCode = 'ARENA-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+      device.polls = 0;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          device_code: device.code,
+          user_code: device.userCode,
+          verification_uri: `http://127.0.0.1:${server.address().port}/activate`,
+          verification_uri_complete: `http://127.0.0.1:${server.address().port}/activate?code=${device.userCode}`,
+          interval: 1,
+          expires_in: 300,
+        })
+      );
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/oauth/token') {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body || '{}');
+        } catch {
+          parsed = {};
+        }
+        const json = (status, obj) => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(obj));
+        };
+        if (parsed.grant_type === 'refresh_token') {
+          return json(200, { access_token: 'mock-refreshed-token', token_type: 'Bearer', expires_in: 3600 });
+        }
+        if (parsed.grant_type !== 'urn:ietf:params:oauth:grant-type:device_code' || parsed.device_code !== device.code) {
+          return json(400, { error: 'invalid_grant' });
+        }
+        device.polls++;
+        if (device.polls < 2) {
+          return json(400, { error: 'authorization_pending' });
+        }
+        json(200, {
+          access_token: 'mock-access-token',
+          refresh_token: 'mock-refresh-token',
+          token_type: 'Bearer',
+          expires_in: 3600,
+          account: { email: 'dev@arena.ai', name: 'Arena Developer', plan: 'pro' },
+        });
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && req.url.startsWith('/activate')) {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(
+        `<html><body style="font-family:sans-serif;padding:3rem;background:#111;color:#eee">
+           <h2 style="color:#a78bfa">◆ Arena AI — device activation</h2>
+           <p>Mock activation page. The CLI auto-approves after a couple of seconds.</p>
+           <p>Code: <b>${device.userCode || '(none issued yet)'}</b></p>
+         </body></html>`
+      );
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/me') {
+      const auth = req.headers.authorization || '';
+      if (!auth.startsWith('Bearer ')) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ email: 'dev@arena.ai', name: 'Arena Developer', plan: 'pro' }));
+      return;
+    }
+
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: [{ id: 'arena-agent' }, { id: 'arena-agent-fast' }, { id: 'arena-agent-mini' }] }));

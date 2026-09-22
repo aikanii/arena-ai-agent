@@ -161,50 +161,6 @@ async function main() {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  await test('login flow: device auth stores credentials; whoami/logout work', () => {
-    const dir = tmpProject('login');
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'arena-home-'));
-    const env = { ...process.env, HOME: home, FORCE_COLOR: '0' };
-    delete env.ARENA_API_KEY;
-
-    // 1. arena --mock login → device flow auto-approves, auth.json created
-    const login = spawnSync(process.execPath, [BIN, '--mock', 'login'], {
-      cwd: dir, env, encoding: 'utf8', timeout: 60000,
-    });
-    assert.strictEqual(login.status, 0, `login exit ${login.status}\n${login.stdout}\n${login.stderr}`);
-    assert.ok(/sign in to arena ai/i.test(login.stdout), 'should show sign-in instructions');
-    assert.ok(/ARENA-[A-Z0-9]+/.test(login.stdout), 'should show a user code');
-    const authFile = path.join(home, '.arena-agent', 'auth.json');
-    assert.ok(fs.existsSync(authFile), 'auth.json must be created');
-    const creds = JSON.parse(fs.readFileSync(authFile, 'utf8'));
-    assert.ok(creds.accessToken, 'access token stored');
-    assert.ok(creds.endpoint, 'endpoint recorded');
-    assert.ok(/signed in/i.test(login.stdout), 'should confirm sign-in');
-
-    // 2. whoami shows the connected account
-    const who = spawnSync(process.execPath, [BIN, '--mock', 'whoami'], { cwd: dir, env, encoding: 'utf8', timeout: 30000 });
-    assert.strictEqual(who.status, 0);
-    assert.ok(who.stdout.includes('dev@arena.ai'), 'account email shown');
-
-    // 3. the stored login token is enough to run the agent (no env key anywhere)
-    const run = spawnSync(process.execPath, [BIN, '--mock', '--full-auto', '-p', 'add authentication'], {
-      cwd: dir, env, encoding: 'utf8', timeout: 90000,
-    });
-    assert.strictEqual(run.status, 0, `run exit ${run.status}\n${run.stdout}\n${run.stderr}`);
-    assert.ok(fs.existsSync(path.join(dir, 'src', 'auth.js')), 'agent ran using the login token');
-
-    // 4. logout removes credentials; agent then shows sign-in guidance
-    const out = spawnSync(process.execPath, [BIN, 'logout'], { cwd: dir, env, encoding: 'utf8', timeout: 30000 });
-    assert.strictEqual(out.status, 0);
-    assert.ok(!fs.existsSync(authFile), 'auth.json removed');
-    const after = spawnSync(process.execPath, [BIN, '-p', 'hi'], { cwd: dir, env, encoding: 'utf8', timeout: 30000 });
-    assert.strictEqual(after.status, 2);
-    assert.ok(/arena login/.test(after.stdout), 'signed-out box points at arena login');
-
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-
   await test('CLI help and version work', () => {
     const h = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
     assert.strictEqual(h.status, 0);

@@ -21,14 +21,7 @@ ${style.bold('USAGE')}
   arena                     Start an interactive session in the current directory
   arena "task description"  Start interactively with an initial task
   arena -p "task"           One-shot mode: run the task, print the result, exit
-  arena <command>           Run a subcommand (login, logout, whoami, init, doctor, sessions)
-
-${style.bold('ACCOUNT')}
-  arena login               Sign in to your Arena AI account (opens the activation
-                            page in your browser; enter the shown code to approve)
-      --no-browser          Don't try to open a browser automatically
-  arena whoami              Show which Arena AI account is connected
-  arena logout              Remove saved credentials
+  arena <command>           Run a subcommand (init, doctor, sessions)
 
 ${style.bold('OPTIONS')}
   -p, --print               Non-interactive mode (for scripts and pipes)
@@ -40,7 +33,7 @@ ${style.bold('OPTIONS')}
       --mode <mode>         Permission mode: plan | default | acceptEdits | fullAuto
       --model <name>        Model to use (default: arena-agent)
       --base-url <url>      API base URL (default: https://api.arena.ai/v1)
-      --api-key <key>       Use an API key instead of a signed-in account (CI)
+      --api-key <key>       API key (normally set via ARENA_API_KEY)
       --mock                Use the bundled offline mock model (no network)
       --max-turns <n>       Tool-step limit per user turn (default 40)
       --verbose             Show full tool results and raw output
@@ -52,7 +45,6 @@ ${style.bold('ENVIRONMENT')}
   ARENA_MAX_TURNS, ARENA_SHELL
 
 ${style.bold('EXAMPLES')}
-  arena login
   arena "add authentication to this application"
   arena -p "fix the failing tests" --auto-edit
   arena --plan "how would you migrate this app to TypeScript?"
@@ -86,8 +78,6 @@ function parseArgs(argv) {
       case '--base-url': [flags.baseUrl, i] = takeValue(a, i, ''); break;
       case '--api-key': [flags.apiKey, i] = takeValue(a, i, ''); break;
       case '--mock': flags.mock = true; break;
-      case '--no-browser': flags.noBrowser = true; break;
-      case '--force': flags.force = true; break;
       case '--max-turns': [flags.maxTurns, i] = takeValue(a, i, '40'); break;
       case '--temperature': [flags.temperature, i] = takeValue(a, i, '0.2'); break;
       case '--verbose': flags.verbose = true; break;
@@ -130,50 +120,23 @@ async function main(argv = []) {
 
   const command = flags.positional[0];
   if (command === 'init') return cmdInit(flags);
+  if (command === 'doctor') return cmdDoctor(flags);
+  if (command === 'sessions') return cmdSessions();
 
   const root = process.cwd();
+  let config = resolveConfig(flags, root);
 
-  // Offline mock: start before anything API-facing so that login, doctor and
-  // the agent itself can all run with --mock and no network.
+  // Offline demo mode: spin up the bundled mock Arena API.
   let mockServer = null;
-  let overrides = {};
-  if (flags.mock || process.env.ARENA_MOCK === '1') {
+  if (config.mock) {
     const { startMockServer } = require('../mock/server');
     mockServer = await startMockServer(0);
-    overrides = { baseUrl: `http://127.0.0.1:${mockServer.port}/v1`, apiKey: 'mock-key' };
+    config = { ...config, baseUrl: `http://127.0.0.1:${mockServer.port}/v1`, apiKey: 'mock-key' };
     render.info(`[mock] offline mock model listening on 127.0.0.1:${mockServer.port}`);
   }
 
-  const subcommands = ['login', 'logout', 'whoami', 'doctor', 'sessions'];
-  try {
-    switch (command) {
-      case 'login':
-        return await cmdLogin(flags, overrides);
-      case 'logout':
-        return cmdLogout();
-      case 'whoami':
-        return await cmdWhoami(flags, overrides);
-      case 'doctor':
-        return await cmdDoctor(flags, overrides);
-      case 'sessions':
-        return cmdSessions();
-      default:
-        return await runAgent(flags, root, overrides, mockServer);
-    }
-  } finally {
-    if (mockServer && subcommands.includes(command)) await mockServer.close();
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* Agent entry (interactive REPL or one-shot)                          */
-/* ------------------------------------------------------------------ */
-
-async function runAgent(flags, root, overrides, mockServer) {
-  const config = resolveConfig(flags, root, overrides);
-
   if (!config.apiKey) {
-    render.signedOut();
+    render.missingKey();
     if (mockServer) await mockServer.close();
     process.exitCode = 2;
     return;
@@ -379,16 +342,7 @@ async function handleSlash(text, env) {
 
     case '/status': {
       const u = session.usage || {};
-      const authLabel =
-        config.authSource === 'login'
-          ? `signed in${config.account && config.account.email ? ' as ' + config.account.email : ''}`
-          : config.authSource === 'mock'
-            ? 'offline mock'
-            : config.authSource === 'env'
-              ? 'ARENA_API_KEY'
-              : config.authSource || 'none';
       render.print(`${style.bold('session')} ${session.id}
-${style.bold('account')} ${authLabel}
 ${style.bold('model')}   ${config.model} (${getModel(config.model).label})
 ${style.bold('mode')}    ${permissions.mode}
 ${style.bold('cwd')}     ${session.cwd}
@@ -459,96 +413,7 @@ ${style.bold('tokens')}  ~${Math.round(agent.contextTokens() / 1000)}k context (
 }
 
 /* ------------------------------------------------------------------ */
-/* Account subcommands (login / logout / whoami)                       */
-/* ------------------------------------------------------------------ */
-
-async function cmdLogin(flags, overrides) {
-  const auth = require('./auth');
-  const { Spinner } = require('./ui/spinner');
-  const config = resolveConfig(flags, process.cwd(), overrides);
-
-  const existing = auth.loadCredentials();
-  if (existing && existing.account && existing.account.email) {
-    render.info(`already signed in as ${existing.account.email} — signing in again replaces the saved credentials.`);
-  }
-
-  render.print('');
-  render.print(`${style.bold(style.purple('◆ Sign in to Arena AI'))}  ${style.gray('· connecting to ' + config.baseUrl)}`);
-  render.print('');
-
-  let spinner = null;
-  try {
-    const creds = await auth.deviceLogin(config.baseUrl, {
-      onDeviceCode: async (d) => {
-        const copied = auth.copyToClipboard(d.user_code);
-        render.print(`  ${style.bold('1.')} Open:  ${style.cyan(style.underline(d.verification_uri))}`);
-        render.print(
-          `  ${style.bold('2.')} Code:  ${style.bold(style.yellow(' ' + d.user_code + ' '))}${copied ? style.gray('(copied to clipboard)') : ''}`
-        );
-        render.print('');
-        if (!flags.noBrowser) {
-          const opened = auth.openUrl(d.verification_uri_complete || d.verification_uri);
-          render.info(opened ? 'opening your browser…' : "couldn't open a browser automatically — visit the URL above");
-        }
-        spinner = new Spinner('waiting for you to approve in the browser… (Ctrl+C to cancel)').start();
-      },
-    });
-    if (spinner) spinner.stop();
-
-    if (!creds.account) creds.account = await auth.fetchAccount(config.baseUrl, creds.accessToken);
-    auth.saveCredentials(creds);
-
-    render.signedInBox({
-      name: creds.account && creds.account.name,
-      email: creds.account && creds.account.email,
-      plan: creds.account && creds.account.plan,
-      endpoint: creds.endpoint,
-    });
-  } catch (err) {
-    if (spinner) spinner.stop();
-    render.error(err.message);
-    process.exitCode = 1;
-  }
-}
-
-function cmdLogout() {
-  const { loadCredentials, clearCredentials } = require('./auth');
-  const existing = loadCredentials();
-  if (existing && existing.accessToken && clearCredentials()) {
-    render.info(`✓ signed out${existing.account && existing.account.email ? ' (' + existing.account.email + ')' : ''} — saved credentials removed.`);
-  } else {
-    render.info('not signed in on this machine (nothing to remove).');
-  }
-}
-
-async function cmdWhoami(flags, overrides) {
-  const auth = require('./auth');
-  const creds = auth.loadCredentials();
-  if (!creds || !creds.accessToken) {
-    render.warn('not signed in — run `arena login` to connect your Arena AI account.');
-    process.exitCode = 1;
-    return;
-  }
-  // Refresh account details live when possible.
-  let account = creds.account;
-  const endpoint = creds.endpoint || resolveConfig(flags, process.cwd(), overrides).baseUrl;
-  const fresh = await auth.fetchAccount(endpoint, creds.accessToken);
-  if (fresh) {
-    account = fresh;
-    creds.account = fresh;
-    auth.saveCredentials(creds);
-  }
-  render.print(`${style.bold(style.purple('◆ Arena AI account'))}`);
-  render.print(`  ${style.bold('name')}     ${account?.name || '—'}`);
-  render.print(`  ${style.bold('email')}    ${account?.email || '—'}`);
-  if (account?.plan) render.print(`  ${style.bold('plan')}     ${account.plan}`);
-  render.print(`  ${style.bold('endpoint')} ${endpoint}`);
-  render.print(`  ${style.bold('since')}    ${creds.obtainedAt || '?'}`);
-  render.print(style.gray('  token stored at ' + auth.authPath()));
-}
-
-/* ------------------------------------------------------------------ */
-/* Other subcommands                                                   */
+/* Subcommands                                                         */
 /* ------------------------------------------------------------------ */
 
 function cmdInit(flags, forceInline = false) {
@@ -601,9 +466,9 @@ function cmdSessions() {
   render.info('resume with: arena --resume <id>   (or arena --continue for the newest)');
 }
 
-async function cmdDoctor(flags, overrides = {}) {
+async function cmdDoctor(flags) {
   const root = process.cwd();
-  const config = resolveConfig(flags, root, overrides);
+  const config = resolveConfig(flags, root);
   const checks = [];
   const ok = (label, val) => checks.push([true, label, val]);
   const bad = (label, val) => checks.push([false, label, val]);
@@ -622,16 +487,8 @@ async function cmdDoctor(flags, overrides = {}) {
 
   ok('api base url', config.baseUrl);
   ok('model', config.model);
-  if (config.authSource === 'login') {
-    const email = config.account && config.account.email;
-    ok('account', `signed in${email ? ' as ' + email : ''} (arena login)`);
-  } else if (config.authSource === 'mock') {
-    ok('account', 'offline mock model (--mock)');
-  } else if (config.apiKey) {
-    ok('credentials', `API key via ${config.authSource === 'env' ? 'ARENA_API_KEY' : config.authSource}`);
-  } else {
-    bad('account', 'not signed in — run `arena login` (or set ARENA_API_KEY, or use --mock)');
-  }
+  if (config.apiKey) ok('api key', `${config.apiKey.slice(0, 6)}… (${config.apiKey.length} chars)`);
+  else bad('api key', 'not set — export ARENA_API_KEY or pass --api-key (or use --mock)');
 
   const git = require('./context').gitInfo(root);
   if (git) ok('git', `branch ${git.branch}${git.dirty ? ', dirty' : ''}`);

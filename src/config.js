@@ -6,7 +6,6 @@ const { homeDir } = require('./session');
 const { DEFAULT_BASE_URL } = require('./llm');
 const { DEFAULT_MODEL } = require('./models');
 const { normalizeMode } = require('./permissions');
-const { getStoredToken, loadCredentials } = require('./auth');
 
 function readJson(p) {
   try {
@@ -18,41 +17,16 @@ function readJson(p) {
 
 /**
  * Resolve configuration with precedence:
- * CLI flags > runtime overrides (e.g. --mock server) > environment >
- * signed-in account (arena login) > project .arena/settings.json >
- * ~/.arena-agent/config.json > defaults
+ * CLI flags > environment > project .arena/settings.json > ~/.arena-agent/config.json > defaults
  */
-function resolveConfig(flags = {}, root = process.cwd(), overrides = {}) {
+function resolveConfig(flags = {}, root = process.cwd()) {
   const globalCfg = readJson(path.join(homeDir(), 'config.json')) || {};
   const projectCfg = readJson(path.join(root, '.arena', 'settings.json')) || {};
 
   const pick = (...vals) => vals.find((v) => v !== undefined && v !== null && v !== '');
 
-  const baseUrl = pick(
-    flags.baseUrl,
-    overrides.baseUrl,
-    process.env.ARENA_BASE_URL,
-    projectCfg.baseUrl,
-    globalCfg.baseUrl,
-    DEFAULT_BASE_URL
-  );
-
-  // Credentials: explicit key wins; otherwise a signed-in account token.
-  let apiKey = pick(flags.apiKey, overrides.apiKey, process.env.ARENA_API_KEY, '');
-  let authSource = apiKey ? (flags.apiKey ? 'flag' : overrides.apiKey ? 'mock' : 'env') : null;
-  if (!apiKey) {
-    const stored = getStoredToken(baseUrl);
-    if (stored) {
-      apiKey = stored;
-      authSource = 'login';
-    }
-  }
-  if (!apiKey) {
-    apiKey = pick(projectCfg.apiKey, globalCfg.apiKey, '');
-    if (apiKey) authSource = 'config';
-  }
-  const account = authSource === 'login' ? (loadCredentials() || {}).account || null : null;
-
+  const baseUrl = pick(flags.baseUrl, process.env.ARENA_BASE_URL, projectCfg.baseUrl, globalCfg.baseUrl, DEFAULT_BASE_URL);
+  const apiKey = pick(flags.apiKey, process.env.ARENA_API_KEY, projectCfg.apiKey, globalCfg.apiKey, '');
   const model = pick(flags.model, process.env.ARENA_MODEL, projectCfg.model, globalCfg.model, DEFAULT_MODEL);
 
   let mode = 'default';
@@ -67,8 +41,6 @@ function resolveConfig(flags = {}, root = process.cwd(), overrides = {}) {
   return {
     baseUrl,
     apiKey,
-    authSource,
-    account,
     model,
     mode,
     mock: !!(flags.mock || process.env.ARENA_MOCK === '1'),
